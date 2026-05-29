@@ -25,6 +25,10 @@ var CLI struct {
 	} `cmd:"" help:"Decrypt a file."`
 
 	Config struct{} `cmd:"" help:"Show cipher configuration."`
+
+	Build struct {
+		ConfigID string `arg:"" help:"Configuration ID in format <block>c<comp>f<fold>d<deg>."`
+	} `cmd:"" help:"Build the CLI with the specified cipher configuration."`
 }
 
 func main() {
@@ -47,5 +51,10 @@ func main() {
 		}
 	case "config":
 		showConfig()
+	case "build <config-id>":
+		if err := runBuild(CLI.Build.ConfigID); err != nil {
+			fmt.Fprintf(os.Stderr, "Error building CLI: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
