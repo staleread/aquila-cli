@@ -12,3 +12,7 @@ func showConfig() {
 	fmt.Printf("Fold size: %d\n", asym.FoldSize)
 	fmt.Printf("Confusion Degree: %d\n", asym.Degree)
 }
+
+func getConfigID() string {
+	return fmt.Sprintf("%dc%df%dd%d", asym.BlockSize*8, asym.Compositions, asym.FoldSize, asym.Degree)
+}

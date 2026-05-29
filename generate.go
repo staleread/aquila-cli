@@ -9,12 +9,13 @@ import (
 )
 
 func generateKeyPair(name string) error {
-	privFile := "id_aquila"
-	pubFile := "id_aquila.pub"
+	cfgID := getConfigID()
+	privFile := fmt.Sprintf("id_aquila%s", cfgID)
+	pubFile := fmt.Sprintf("id_aquila%s.pub", cfgID)
 
 	if name != "" {
-		privFile = fmt.Sprintf("id_aquila_%s", name)
-		pubFile = fmt.Sprintf("id_aquila_%s.pub", name)
+		privFile = fmt.Sprintf("id_aquila%s_%s", cfgID, name)
+		pubFile = fmt.Sprintf("id_aquila%s_%s.pub", cfgID, name)
 	}
 
 	priv, pub, err := asym.GenerateKeyPair(rand.Reader)
