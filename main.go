@@ -34,6 +34,11 @@ var CLI struct {
 		Folder     string `short:"o" required:"" type:"path" help:"Path to the output folder."`
 		RndSamples int    `long:"rnd-samples" required:"" help:"Number of random samples to analyze."`
 	} `cmd:"" name:"analyze" help:"Run cipher analysis experiments."`
+
+	Anf struct {
+		Key    string `short:"k" required:"" type:"existingfile" help:"Path to the public key file."`
+		Output string `short:"o" required:"" type:"path" help:"Path to the output file."`
+	} `cmd:"" help:"Export public key equations in Algebraic Normal Form (ANF)."`
 }
 
 func main() {
@@ -64,6 +69,11 @@ func main() {
 	case "analyze":
 		if err := runAnalyze(CLI.Analyze.Folder, CLI.Analyze.RndSamples); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running analysis: %v\n", err)
+			os.Exit(1)
+		}
+	case "anf":
+		if err := exportANF(CLI.Anf.Key, CLI.Anf.Output); err != nil {
+			fmt.Fprintf(os.Stderr, "Error exporting ANF: %v\n", err)
 			os.Exit(1)
 		}
 	}
