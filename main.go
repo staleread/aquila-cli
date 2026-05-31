@@ -30,10 +30,10 @@ var CLI struct {
 		ConfigID string `arg:"" help:"Configuration ID in format <block>c<comp>f<fold>d<deg>."`
 	} `cmd:"" help:"Build the CLI with the specified cipher configuration."`
 
-	AnalyzeBoundary struct {
-		Output string `short:"o" required:"" type:"path" help:"Path to the output CSV file."`
-		Ones   bool   `help:"Run the boundary ones experiment instead of boundary zeros."`
-	} `cmd:"" name:"analyze-boundary" help:"Run boundary analysis experiment."`
+	Analyze struct {
+		Folder     string `short:"o" required:"" type:"path" help:"Path to the output folder."`
+		RndSamples int    `long:"rnd-samples" required:"" help:"Number of random samples to analyze."`
+	} `cmd:"" name:"analyze" help:"Run cipher analysis experiments."`
 }
 
 func main() {
@@ -61,14 +61,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error building CLI: %v\n", err)
 			os.Exit(1)
 		}
-	case "analyze-boundary":
-		var err error
-		if CLI.AnalyzeBoundary.Ones {
-			err = runAnalyzeBoundaryOnes(CLI.AnalyzeBoundary.Output)
-		} else {
-			err = runAnalyzeBoundaryZeros(CLI.AnalyzeBoundary.Output)
-		}
-		if err != nil {
+	case "analyze":
+		if err := runAnalyze(CLI.Analyze.Folder, CLI.Analyze.RndSamples); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running analysis: %v\n", err)
 			os.Exit(1)
 		}

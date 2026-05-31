@@ -4,14 +4,16 @@ import (
 	"crypto/rand"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	"github.com/staleread/aquila/sym"
 )
 
-func runAnalyzeBoundaryZeros(outputPath string) error {
+func runAnalyze(folder string, rndSamples int) error {
 	block, err := sym.New(rand.Reader)
 	if err != nil {
 		return fmt.Errorf("failed to generate block cipher: %w", err)
@@ -20,112 +22,100 @@ func runAnalyzeBoundaryZeros(outputPath string) error {
 	blockSizeBytes := block.BlockSize()
 	blockSizeBits := blockSizeBytes * 8
 
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", folder, err)
 	}
-	defer f.Close()
 
-	writer := csv.NewWriter(f)
+	avFile, err := os.Create(filepath.Join(folder, "avalanche.csv"))
+	if err != nil {
+		return fmt.Errorf("failed to create avalanche.csv: %w", err)
+	}
+	defer avFile.Close()
+
+	writer := csv.NewWriter(avFile)
 	defer writer.Flush()
 
-	if err := writer.Write([]string{"OneInputPosition", "OnesOutputCount"}); err != nil {
+	if err := writer.Write([]string{"bit_index", "zeros_bg", "ones_bg", "random_bg_avg"}); err != nil {
 		return fmt.Errorf("failed to write CSV header: %w", err)
 	}
 
-	countOnes := func(b []byte) int {
-		ones := 0
-		for _, val := range b {
-			ones += bits.OnesCount8(val)
+	hammingDistance := func(a, b []byte) int {
+		dist := 0
+		for i := range a {
+			dist += bits.OnesCount8(a[i] ^ b[i])
 		}
-		return ones
+		return dist
 	}
 
-	src := make([]byte, blockSizeBytes)
-	dst := make([]byte, blockSizeBytes)
-	block.Encrypt(dst, src)
-	onesCount := countOnes(dst)
+	zeroBaseSrc := make([]byte, blockSizeBytes)
+	zeroBaseDst := make([]byte, blockSizeBytes)
+	block.Encrypt(zeroBaseDst, zeroBaseSrc)
 
-	if err := writer.Write([]string{"-1", strconv.Itoa(onesCount)}); err != nil {
-		return fmt.Errorf("failed to write zeroed block result: %w", err)
+	oneBaseSrc := make([]byte, blockSizeBytes)
+	for j := range oneBaseSrc {
+		oneBaseSrc[j] = 0xFF
 	}
+	oneBaseDst := make([]byte, blockSizeBytes)
+	block.Encrypt(oneBaseDst, oneBaseSrc)
+
+	randSamplesSrc := make([][]byte, rndSamples)
+	randSamplesDst := make([][]byte, rndSamples)
+	for s := range rndSamples {
+		randSamplesSrc[s] = make([]byte, blockSizeBytes)
+		if _, err := io.ReadFull(rand.Reader, randSamplesSrc[s]); err != nil {
+			return fmt.Errorf("failed to read random bytes: %w", err)
+		}
+		randSamplesDst[s] = make([]byte, blockSizeBytes)
+		block.Encrypt(randSamplesDst[s], randSamplesSrc[s])
+	}
+
+	srcBuf := make([]byte, blockSizeBytes)
+	dstBuf := make([]byte, blockSizeBytes)
 
 	for i := range blockSizeBits {
-		for j := range src {
-			src[j] = 0
+		// --- Zeros BG ---
+		for j := range srcBuf {
+			srcBuf[j] = 0
 		}
-		byteIndex := i / 8
-		bitIndex := i % 8
-		src[byteIndex] = 1 << bitIndex
+		srcBuf[i/8] = 1 << (i % 8)
+		block.Encrypt(dstBuf, srcBuf)
+		zerosBgVal := hammingDistance(dstBuf, zeroBaseDst)
 
-		block.Encrypt(dst, src)
-		onesCount = countOnes(dst)
+		// --- Ones Background ---
+		for j := range srcBuf {
+			srcBuf[j] = 0xFF
+		}
+		srcBuf[i/8] &^= (1 << (i % 8))
+		block.Encrypt(dstBuf, srcBuf)
+		onesBgVal := hammingDistance(dstBuf, oneBaseDst)
 
-		if err := writer.Write([]string{strconv.Itoa(i), strconv.Itoa(onesCount)}); err != nil {
-			return fmt.Errorf("failed to write result for bit %d: %w", i, err)
+		// --- Random Background Avg ---
+		totalRandDiff := 0
+		for s := range rndSamples {
+			copy(srcBuf, randSamplesSrc[s])
+			srcBuf[i/8] ^= (1 << (i % 8))
+			block.Encrypt(dstBuf, srcBuf)
+			totalRandDiff += hammingDistance(dstBuf, randSamplesDst[s])
+		}
+		randBgAvgVal := float64(totalRandDiff) / float64(rndSamples)
+
+		row := []string{
+			strconv.Itoa(i),
+			strconv.Itoa(zerosBgVal),
+			strconv.Itoa(onesBgVal),
+			fmt.Sprintf("%.4f", randBgAvgVal),
+		}
+		if err := writer.Write(row); err != nil {
+			return fmt.Errorf("failed to write row %d to avalanche.csv: %w", i, err)
 		}
 	}
 
-	return nil
-}
-
-func runAnalyzeBoundaryOnes(outputPath string) error {
-	block, err := sym.New(rand.Reader)
+	// 2. Create correlation.csv
+	corrFile, err := os.Create(filepath.Join(folder, "correlation.csv"))
 	if err != nil {
-		return fmt.Errorf("failed to generate block cipher: %w", err)
+		return fmt.Errorf("failed to create correlation.csv: %w", err)
 	}
-
-	blockSizeBytes := block.BlockSize()
-	blockSizeBits := blockSizeBytes * 8
-
-	f, err := os.Create(outputPath)
-	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
-	}
-	defer f.Close()
-
-	writer := csv.NewWriter(f)
-	defer writer.Flush()
-
-	if err := writer.Write([]string{"ZeroInputPosition", "OnesOutputCount"}); err != nil {
-		return fmt.Errorf("failed to write CSV header: %w", err)
-	}
-
-	countOnes := func(b []byte) int {
-		ones := 0
-		for _, val := range b {
-			ones += bits.OnesCount8(val)
-		}
-		return ones
-	}
-
-	src := make([]byte, blockSizeBytes)
-	for j := range src {
-		src[j] = 0xFF
-	}
-	dst := make([]byte, blockSizeBytes)
-	block.Encrypt(dst, src)
-	onesCount := countOnes(dst)
-
-	if err := writer.Write([]string{"-1", strconv.Itoa(onesCount)}); err != nil {
-		return fmt.Errorf("failed to write all-ones block result: %w", err)
-	}
-
-	for i := range blockSizeBits {
-		for j := range src {
-			src[j] = 0xFF
-		}
-		byteIndex := i / 8
-		bitIndex := i % 8
-		src[byteIndex] &^= (1 << bitIndex)
-
-		block.Encrypt(dst, src)
-		onesCount = countOnes(dst)
-
-		if err := writer.Write([]string{strconv.Itoa(i), strconv.Itoa(onesCount)}); err != nil {
-			return fmt.Errorf("failed to write result for bit %d: %w", i, err)
-		}
-	}
+	corrFile.Close()
 
 	return nil
 }
