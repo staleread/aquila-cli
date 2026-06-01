@@ -16,8 +16,8 @@ func encryptFile(inputPath, outputPath, keyPath string) error {
 	}
 	defer keyF.Close()
 
-	pub, err := asym.DecodePublicKey(keyF)
-	if err != nil {
+	pub := &asym.PublicKey{}
+	if err := pub.Decode(keyF); err != nil {
 		return fmt.Errorf("failed to decode public key: %w", err)
 	}
 

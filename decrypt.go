@@ -15,8 +15,8 @@ func decryptFile(inputPath, outputPath, keyPath string) error {
 	}
 	defer keyF.Close()
 
-	priv, err := asym.DecodePrivateKey(keyF)
-	if err != nil {
+	priv := &asym.PrivateKey{}
+	if err := priv.Decode(keyF); err != nil {
 		return fmt.Errorf("failed to decode private key: %w", err)
 	}
 
