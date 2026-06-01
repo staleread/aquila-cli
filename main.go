@@ -31,13 +31,13 @@ var CLI struct {
 	} `cmd:"" help:"Build the CLI with the specified cipher configuration."`
 
 	Analyze struct {
-		Folder     string `short:"o" required:"" type:"path" help:"Path to the output folder."`
-		RndSamples int    `long:"rnd-samples" required:"" help:"Number of random samples to analyze."`
+		Folder      string `short:"o" required:"" type:"path" help:"Path to the output folder."`
+		RndSamples  int    `long:"rnd-samples" required:"" help:"Number of random samples to analyze."`
+		Correlation bool   `long:"correlation" help:"Generate monom-correlation.csv using public key (caution: deriving public key for large configurations like 96-bit key with 2 compositions can result in ~3 GB public key)."`
 	} `cmd:"" name:"analyze" help:"Run cipher analysis experiments."`
 
 	Anf struct {
-		Key    string `short:"k" required:"" type:"existingfile" help:"Path to the public key file."`
-		Output string `short:"o" required:"" type:"path" help:"Path to the output file."`
+		Key string `short:"k" required:"" type:"existingfile" help:"Path to the public key file."`
 	} `cmd:"" help:"Export public key equations in Algebraic Normal Form (ANF)."`
 }
 
@@ -67,12 +67,12 @@ func main() {
 			os.Exit(1)
 		}
 	case "analyze":
-		if err := runAnalyze(CLI.Analyze.Folder, CLI.Analyze.RndSamples); err != nil {
+		if err := runAnalyze(CLI.Analyze.Folder, CLI.Analyze.RndSamples, CLI.Analyze.Correlation); err != nil {
 			fmt.Fprintf(os.Stderr, "Error running analysis: %v\n", err)
 			os.Exit(1)
 		}
 	case "anf":
-		if err := exportANF(CLI.Anf.Key, CLI.Anf.Output); err != nil {
+		if err := exportANF(CLI.Anf.Key); err != nil {
 			fmt.Fprintf(os.Stderr, "Error exporting ANF: %v\n", err)
 			os.Exit(1)
 		}
