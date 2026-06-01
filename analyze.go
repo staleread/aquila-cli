@@ -10,17 +10,19 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/staleread/aquila/sym"
+	"github.com/staleread/aquila/asym"
 )
 
-func runAnalyze(folder string, rndSamples int) error {
-	block, err := sym.New(rand.Reader)
+func runAnalyze(folder string, rndSamples int, correlation bool) error {
+	priv, err := asym.GeneratePrivateKey(rand.Reader)
 	if err != nil {
-		return fmt.Errorf("failed to generate block cipher: %w", err)
+		return fmt.Errorf("failed to generate private key: %w", err)
 	}
 
-	blockSizeBytes := block.BlockSize()
+	blockSizeBytes := asym.BlockSize
 	blockSizeBits := blockSizeBytes * 8
+
+	changeCounts := make([]int, blockSizeBits)
 
 	if err := os.MkdirAll(folder, 0755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", folder, err)
@@ -48,15 +50,19 @@ func runAnalyze(folder string, rndSamples int) error {
 	}
 
 	zeroBaseSrc := make([]byte, blockSizeBytes)
-	zeroBaseDst := make([]byte, blockSizeBytes)
-	block.Encrypt(zeroBaseDst, zeroBaseSrc)
+	zeroBaseDst, err := priv.Sign(nil, zeroBaseSrc, nil)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt zero base: %w", err)
+	}
 
 	oneBaseSrc := make([]byte, blockSizeBytes)
 	for j := range oneBaseSrc {
 		oneBaseSrc[j] = 0xFF
 	}
-	oneBaseDst := make([]byte, blockSizeBytes)
-	block.Encrypt(oneBaseDst, oneBaseSrc)
+	oneBaseDst, err := priv.Sign(nil, oneBaseSrc, nil)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt one base: %w", err)
+	}
 
 	randSamplesSrc := make([][]byte, rndSamples)
 	randSamplesDst := make([][]byte, rndSamples)
@@ -65,12 +71,14 @@ func runAnalyze(folder string, rndSamples int) error {
 		if _, err := io.ReadFull(rand.Reader, randSamplesSrc[s]); err != nil {
 			return fmt.Errorf("failed to read random bytes: %w", err)
 		}
-		randSamplesDst[s] = make([]byte, blockSizeBytes)
-		block.Encrypt(randSamplesDst[s], randSamplesSrc[s])
+		randSamplesDst[s], err = priv.Sign(nil, randSamplesSrc[s], nil)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt random sample: %w", err)
+		}
 	}
 
 	srcBuf := make([]byte, blockSizeBytes)
-	dstBuf := make([]byte, blockSizeBytes)
+	var dstBuf []byte
 
 	for i := range blockSizeBits {
 		// --- Zeros BG ---
@@ -78,7 +86,10 @@ func runAnalyze(folder string, rndSamples int) error {
 			srcBuf[j] = 0
 		}
 		srcBuf[i/8] = 1 << (i % 8)
-		block.Encrypt(dstBuf, srcBuf)
+		dstBuf, err = priv.Sign(nil, srcBuf, nil)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt zeros bg: %w", err)
+		}
 		zerosBgVal := hammingDistance(dstBuf, zeroBaseDst)
 
 		// --- Ones Background ---
@@ -86,7 +97,10 @@ func runAnalyze(folder string, rndSamples int) error {
 			srcBuf[j] = 0xFF
 		}
 		srcBuf[i/8] &^= (1 << (i % 8))
-		block.Encrypt(dstBuf, srcBuf)
+		dstBuf, err = priv.Sign(nil, srcBuf, nil)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt ones bg: %w", err)
+		}
 		onesBgVal := hammingDistance(dstBuf, oneBaseDst)
 
 		// --- Random Background Avg ---
@@ -94,8 +108,17 @@ func runAnalyze(folder string, rndSamples int) error {
 		for s := range rndSamples {
 			copy(srcBuf, randSamplesSrc[s])
 			srcBuf[i/8] ^= (1 << (i % 8))
-			block.Encrypt(dstBuf, srcBuf)
+			dstBuf, err = priv.Sign(nil, srcBuf, nil)
+			if err != nil {
+				return fmt.Errorf("failed to encrypt random background: %w", err)
+			}
 			totalRandDiff += hammingDistance(dstBuf, randSamplesDst[s])
+
+			for o := range blockSizeBits {
+				if ((randSamplesDst[s][o/8] ^ dstBuf[o/8]) & (1 << (o % 8))) != 0 {
+					changeCounts[o]++
+				}
+			}
 		}
 		randBgAvgVal := float64(totalRandDiff) / float64(rndSamples)
 
@@ -110,12 +133,38 @@ func runAnalyze(folder string, rndSamples int) error {
 		}
 	}
 
-	// 2. Create correlation.csv
-	corrFile, err := os.Create(filepath.Join(folder, "correlation.csv"))
-	if err != nil {
-		return fmt.Errorf("failed to create correlation.csv: %w", err)
+	if correlation {
+		pub, err := priv.PublicKey()
+		if err != nil {
+			return fmt.Errorf("failed to derive public key: %w", err)
+		}
+		desc := pub.Describe()
+
+		corrFile, err := os.Create(filepath.Join(folder, "monom-correlation.csv"))
+		if err != nil {
+			return fmt.Errorf("failed to create monom-correlation.csv: %w", err)
+		}
+		defer corrFile.Close()
+
+		corrWriter := csv.NewWriter(corrFile)
+		defer corrWriter.Flush()
+
+		if err := corrWriter.Write([]string{"output_bit", "monomial_count", "avalanche_prob"}); err != nil {
+			return fmt.Errorf("failed to write CSV header to monom-correlation.csv: %w", err)
+		}
+
+		for o := range blockSizeBits {
+			prob := float64(changeCounts[o]) / float64(blockSizeBits*rndSamples)
+			row := []string{
+				strconv.Itoa(o),
+				strconv.Itoa(desc.MonomialCounts[o]),
+				fmt.Sprintf("%.6f", prob),
+			}
+			if err := corrWriter.Write(row); err != nil {
+				return fmt.Errorf("failed to write row %d to monom-correlation.csv: %w", o, err)
+			}
+		}
 	}
-	corrFile.Close()
 
 	return nil
 }
